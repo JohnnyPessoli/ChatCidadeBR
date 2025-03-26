@@ -149,98 +149,98 @@ class MessagesPlaceholder:
 from dotenv import load_dotenv
 import os
 from datetime import datetime  # Add this import
-
-# Load environment variables
-load_dotenv()
+from langchain_groq import ChatGroq
+from langchain.schema import HumanMessage, SystemMessage, AIMessage
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationChain
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 class ChatGroqConfig:
     def __init__(self):
-        # Add chat history initialization
-        self.chat_history = ChatMessageHistory()
+        # Load environment variables first
+        load_dotenv()
         
-        # Load API key from environment variable
+        # Verify API key is loaded
         self.api_key = os.getenv('GROQ_API_KEY')
         if not self.api_key:
             raise ValueError("GROQ_API_KEY not found in environment variables")
+            
+        self.chat_history = ChatMessageHistory()
         
-        # Define the base system prompt that sets the chatbot's role
-        self.base_prompt = {
-            "role": "system",
-            "content": (
-                "Você é um chatbot especialista em cidades brasileiras. "
-                "Forneça informações precisas e objetivas, sempre em português. "
-                "Base suas respostas apenas nos dados fornecidos."
-            )
-        }
+        # Initialize LangChain components with verified API key
+        self.llm = ChatGroq(
+            api_key=self.api_key,
+            model_name="mixtral-8x7b-32768"
+        )
         
-        # Define different templates for various types of responses
-        self.prompt_templates = {
-            # Template for general city information
-            "city_info": (
-                "Utilize as informações a seguir para responder à pergunta do usuário.\n"
-                "Cidade: {cidade}\n"
-                "População: {populacao}\n"
-                "Pontos turísticos: {pontos_turisticos}\n"
-                "Universidade: {universidade}\n"
-                "Pergunta do usuário: {user_question}\n"
-                "Responda de forma clara e objetiva em português."
-            ),
-            # Template for tourist information
-            "tourist_guide": (
-                "Você é um guia turístico virtual de {cidade}. "
-                "Os principais pontos turísticos são: {pontos_turisticos}. "
-                "Forneça informações interessantes sobre estes locais."
-            ),
-            # Template for university information
-            "university_info": (
-                "Sobre a educação superior em {cidade}, "
-                "a principal instituição é {universidade}. "
-                "Forneça informações sobre esta universidade."
-            )
-        }
-
-    def format_message(self, template_name, **kwargs):
-        """
-        Format a specific template with provided data
-        """
-        # Verify if the requested template exists
-        if template_name not in self.prompt_templates:
-            raise ValueError(f"Template '{template_name}' not found")
+        # Initialize message store
+        self.message_store = {}
         
-        # Create placeholder and format the message    
-        placeholder = MessagesPlaceholder(self.prompt_templates[template_name])
-        return placeholder.format(**kwargs)
-
-    def create_chat_messages(self, city_name, template_name, user_question):
-        """
-        Create a complete message array for ChatGroq
-        """
-        # Check if the requested city exists in our database
-        if city_name not in city_data:
-            return [self.base_prompt, {
-                "role": "assistant",
-                "content": f"Desculpe, não tenho informações sobre a cidade {city_name}."
-            }]
-
-        # Get city information and format the message
-        city_info = city_data[city_name]
-        formatted_prompt = self.format_message(
-            template_name,
-            cidade=city_name,
-            populacao=city_info["população"],
-            pontos_turisticos=", ".join(city_info["pontos_turisticos"]),
-            universidade=city_info["universidade"],
-            user_question=user_question
+        # Enhanced system message
+        self.system_message = SystemMessage(content=(
+            "Você é um chatbot especialista em cidades brasileiras que mantém o contexto da conversa. "
+            "Use o histórico para contextualizar respostas e fazer referências a interações anteriores. "
+            "Base suas respostas apenas nos dados fornecidos sobre as cidades."
+        ))
+        
+        # Initialize chat prompt template
+        self.prompt_template = ChatPromptTemplate.from_messages([
+            self.system_message,
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{input}")
+        ])
+        
+        # Initialize conversation with memory
+        self.memory = ConversationBufferMemory(
+            return_messages=True,
+            memory_key="history",
+            human_prefix="Usuário",
+            ai_prefix="Assistente"
+        )
+        
+        # Create conversation chain with memory
+        self.conversation = ConversationChain(
+            llm=self.llm,
+            prompt=self.prompt_template,
+            memory=self.memory,
+            verbose=True
         )
 
-        # Return the complete message array for ChatGroq
-        return [
-            self.base_prompt,
-            {
-                "role": "user",
-                "content": formatted_prompt
-            }
-        ]
+    def processar_interacao(self, pergunta):
+        cidade = self.extrair_nome_cidade(pergunta)
+        timestamp = datetime.now().isoformat()
+
+        # Add context about the city if present
+        if cidade and cidade in city_data:
+            city_info = city_data[cidade]
+            context = (
+                f"\nInformações disponíveis sobre {cidade}:\n"
+                f"População: {city_info['população']}\n"
+                f"Pontos turísticos: {', '.join(city_info['pontos_turisticos'])}\n"
+                f"Universidade: {city_info['universidade']}\n"
+            )
+            pergunta = context + "\n" + pergunta
+
+        # Process the interaction with memory
+        response = self.conversation.predict(input=pergunta)
+
+        # Store in custom history
+        self.chat_history.add_message({
+            'role': 'user',
+            'content': pergunta,
+            'timestamp': timestamp
+        })
+        
+        self.chat_history.add_message({
+            'role': 'assistant',
+            'content': response,
+            'timestamp': timestamp
+        })
+
+        return {
+            "role": "assistant",
+            "content": response
+        }
 
     def extrair_nome_cidade(self, pergunta):
         """
@@ -294,22 +294,8 @@ class ChatGroqConfig:
         else:
             return {
                 "role": "assistant",
-                "content": f"{cidade} tem uma população de {city_info['população']}, " \
-                          f"possui atrações turísticas como {', '.join(city_info['pontos_turisticos'])}, " \
-                          f"e sua principal universidade é a {city_info['universidade']}."
+                "content": "Desculpe, não tenho informações específicas para responder essa pergunta. Posso informar sobre população, pontos turísticos ou universidades da cidade."
             }
-
-        # Determine the type of information being requested
-        template_name = "city_info"  # default template
-        if any(word in pergunta.lower() for word in ["turístico", "turismo", "visitar", "conhecer"]):
-            template_name = "tourist_guide"
-        elif any(word in pergunta.lower() for word in ["universidade", "faculdade", "estudar"]):
-            template_name = "university_info"
-
-        # Create formatted message using appropriate template
-        messages = self.create_chat_messages(cidade, template_name, pergunta)
-        
-        return messages[-1]  # Return the last message (user query with context)
 
     def processar_interacao(self, pergunta):
         """

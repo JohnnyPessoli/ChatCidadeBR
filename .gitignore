@@ -7,6 +7,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+env/
 build/
 develop-eggs/
 dist/
@@ -18,18 +19,35 @@ lib64/
 parts/
 sdist/
 var/
-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
 # Virtual Environment
 venv/
-env/
 ENV/
+
+# Environment Variables
+.env
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# Streamlit
+.streamlit/
+
+# System Files
+.DS_Store
+Thumbs.db
